@@ -36,7 +36,7 @@ wgpu = [
 snapshot = ["dep:dify", "dep:image", "image/png"]
 
 ## Allows testing eframe::App
-eframe = ["dep:eframe", "eframe/accesskit"]
+eframe = ["dep:eframe"]
 
 # This is just so it compiles with `--all-features` on Linux
 x11 = ["eframe?/x11"]
