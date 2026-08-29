@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use emath::{Align2, Pos2, Rangef, Rect, TSTransform, Vec2, pos2};
+use emath::{Align2, Pos2, Rangef, Rect, Transform3D, Vec2, pos2};
 
 use crate::{
     Color32, CornerRadius, Direction, Mesh, Stroke, StrokeKind, TextureId, Vertex,
@@ -422,80 +422,85 @@ impl Shape {
 
     /// Scale the shape by `factor`, in-place.
     ///
-    /// A wrapper around [`Self::transform`].
+    /// A wrapper around the internal planar geometry transform.
     #[inline(always)]
     pub fn scale(&mut self, factor: f32) {
-        self.transform(TSTransform::from_scaling(factor));
+        self.transform_planar(Transform3D::from_scale(factor, factor, 1.0), factor);
     }
 
     /// Move the shape by `delta`, in-place.
     ///
-    /// A wrapper around [`Self::transform`].
+    /// A wrapper around the internal planar geometry transform.
     #[inline(always)]
     pub fn translate(&mut self, delta: Vec2) {
-        self.transform(TSTransform::from_translation(delta));
+        self.transform_planar(Transform3D::from_translation(delta.x, delta.y, 0.0), 1.0);
     }
 
-    /// Transform (move/scale) the shape in-place.
-    ///
-    /// If using a [`PaintCallback`], note that only the rect is scaled as opposed
-    /// to other shapes where the stroke is also scaled.
-    pub fn transform(&mut self, transform: TSTransform) {
+    /// Keep direct geometry mutation private: UI transforms carry their matrix to the renderer.
+    fn transform_planar(&mut self, transform: Transform3D, scaling: f32) {
         match self {
             Self::Noop => {}
             Self::Vec(shapes) => {
                 for shape in shapes {
-                    shape.transform(transform);
+                    shape.transform_planar(transform, scaling);
                 }
             }
             Self::Circle(circle_shape) => {
-                circle_shape.center = transform * circle_shape.center;
-                circle_shape.radius *= transform.scaling;
-                circle_shape.stroke.width *= transform.scaling;
+                circle_shape.center = transform
+                    .transform_pos2(circle_shape.center)
+                    .unwrap_or(circle_shape.center);
+                circle_shape.radius *= scaling;
+                circle_shape.stroke.width *= scaling;
             }
             Self::Ellipse(ellipse_shape) => {
-                ellipse_shape.center = transform * ellipse_shape.center;
-                ellipse_shape.radius *= transform.scaling;
-                ellipse_shape.stroke.width *= transform.scaling;
+                ellipse_shape.center = transform
+                    .transform_pos2(ellipse_shape.center)
+                    .unwrap_or(ellipse_shape.center);
+                ellipse_shape.radius *= scaling;
+                ellipse_shape.stroke.width *= scaling;
             }
             Self::LineSegment { points, stroke } => {
                 for p in points {
-                    *p = transform * *p;
+                    *p = transform.transform_pos2(*p).unwrap_or(*p);
                 }
-                stroke.width *= transform.scaling;
+                stroke.width *= scaling;
             }
             Self::Path(path_shape) => {
                 for p in &mut path_shape.points {
-                    *p = transform * *p;
+                    *p = transform.transform_pos2(*p).unwrap_or(*p);
                 }
-                path_shape.stroke.width *= transform.scaling;
+                path_shape.stroke.width *= scaling;
             }
             Self::Rect(rect_shape) => {
-                rect_shape.rect = transform * rect_shape.rect;
-                rect_shape.corner_radius *= transform.scaling;
-                rect_shape.stroke.width *= transform.scaling;
-                rect_shape.blur_width *= transform.scaling;
+                rect_shape.rect = transform
+                    .transform_rect(rect_shape.rect)
+                    .unwrap_or(rect_shape.rect);
+                rect_shape.corner_radius *= scaling;
+                rect_shape.stroke.width *= scaling;
+                rect_shape.blur_width *= scaling;
             }
             Self::Text(text_shape) => {
-                text_shape.transform(transform);
+                text_shape.transform_planar(transform, scaling);
             }
             Self::Mesh(mesh) => {
-                Arc::make_mut(mesh).transform(transform);
+                for vertex in &mut Arc::make_mut(mesh).vertices {
+                    vertex.pos = transform.transform_pos2(vertex.pos).unwrap_or(vertex.pos);
+                }
             }
             Self::QuadraticBezier(bezier) => {
                 for p in &mut bezier.points {
-                    *p = transform * *p;
+                    *p = transform.transform_pos2(*p).unwrap_or(*p);
                 }
-                bezier.stroke.width *= transform.scaling;
+                bezier.stroke.width *= scaling;
             }
             Self::CubicBezier(bezier) => {
                 for p in &mut bezier.points {
-                    *p = transform * *p;
+                    *p = transform.transform_pos2(*p).unwrap_or(*p);
                 }
-                bezier.stroke.width *= transform.scaling;
+                bezier.stroke.width *= scaling;
             }
             Self::Callback(shape) => {
-                shape.rect = transform * shape.rect;
+                shape.rect = transform.transform_rect(shape.rect).unwrap_or(shape.rect);
             }
         }
     }

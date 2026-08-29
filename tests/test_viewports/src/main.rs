@@ -427,7 +427,7 @@ fn drag_source<R>(
             let delta = pointer_pos - res.response.rect.center();
             ui.ctx().set_transform_layer(
                 layer_id,
-                eframe::emath::TSTransform::from_translation(delta),
+                eframe::emath::Transform3D::from_translation(delta.x, delta.y, 0.0),
             );
         }
 

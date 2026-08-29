@@ -2667,8 +2667,10 @@ impl Ui {
 
             if let Some(pointer_pos) = self.ctx().pointer_interact_pos() {
                 let delta = pointer_pos - response.rect.center();
-                self.ctx()
-                    .transform_layer_shapes(layer_id, emath::TSTransform::from_translation(delta));
+                self.ctx().set_transform_layer(
+                    layer_id,
+                    emath::Transform3D::from_translation(delta.x, delta.y, 0.0),
+                );
             }
 
             InnerResponse::new(inner, response)
@@ -2737,31 +2739,37 @@ impl Ui {
         (InnerResponse { inner, response }, payload)
     }
 
-    /// Create a new Scope and transform its contents via a [`emath::TSTransform`].
-    /// This only affects visuals, inputs will not be transformed. So this is mostly useful
-    /// to create visual effects on interactions, e.g. scaling a button on hover / click.
+    /// Create a new scope whose paint and input use `transform`.
     ///
-    /// Check out [`Context::set_transform_layer`] for a persistent transform that also affects
-    /// inputs.
-    pub fn with_visual_transform<R>(
+    /// The child keeps its ordinary untransformed layout rectangle, matching Core Animation.
+    pub fn with_transform<R>(
         &mut self,
-        transform: emath::TSTransform,
+        transform: emath::Transform3D,
         add_contents: impl FnOnce(&mut Self) -> R,
     ) -> InnerResponse<R> {
-        let start_idx = self.ctx().graphics(|gx| {
-            gx.get(self.layer_id())
-                .map_or(crate::layers::ShapeIdx(0), |l| l.next_idx())
-        });
+        let layer_id = LayerId::new(self.layer_id().order, self.auto_id_with("transform3d"));
+        self.ctx().set_sublayer(self.layer_id(), layer_id);
+        let to_global = transform
+            * self
+                .ctx()
+                .layer_transform_to_global(self.layer_id())
+                .unwrap_or(emath::Transform3D::IDENTITY);
+        self.ctx().set_transform_layer(layer_id, to_global);
 
-        let r = self.scope_dyn(UiBuilder::new(), Box::new(add_contents));
+        // We cannot use `scope_builder`: it advances the parent cursor before we retain the
+        // child's response. The cursor still advances by these normal, local layout bounds.
+        let next_auto_id_salt = self.next_auto_id_salt;
+        let mut child_ui = self.new_child(UiBuilder::new().layer_id(layer_id));
+        self.next_auto_id_salt = next_auto_id_salt;
+        let inner = add_contents(&mut child_ui);
+        let response = child_ui.remember_min_rect();
+        let local_rect = child_ui.min_rect();
 
-        self.ctx().graphics_mut(|g| {
-            let list = g.entry(self.layer_id());
-            let end_idx = list.next_idx();
-            list.transform_range(start_idx, end_idx, transform);
-        });
+        // Keep layout independent from presentation. Otherwise a perspective-expanded flexible
+        // child can repeatedly enlarge an auto-sized parent and create a sizing feedback loop.
+        self.advance_cursor_after_rect(local_rect);
 
-        r
+        InnerResponse::new(inner, response)
     }
 }
 
@@ -2988,4 +2996,35 @@ fn register_rect(_ui: &Ui, _rect: Rect) {}
 fn ui_impl_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Ui>();
+}
+
+#[test]
+fn transformed_scope_keeps_its_matrix_for_the_renderer() {
+    let ctx = crate::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        ui.with_transform(
+            emath::Transform3D::from_rotation_y(0.2)
+                .around(ui.available_rect_before_wrap().center()),
+            |ui| ui.button("Transform me"),
+        );
+    });
+
+    assert!(output.shapes.iter().any(|shape| shape.transform.is_some()));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn transformed_scope_keeps_its_layout_rect() {
+    let ctx = crate::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        let scope = ui.with_transform(
+            emath::Transform3D::from_translation(1000.0, 0.0, 0.0),
+            |ui| ui.allocate_response(Vec2::new(10.0, 10.0), Sense::hover()),
+        );
+
+        // Presentation moves on its own layer, while the parent sees normal layout coordinates.
+        assert_eq!(scope.response.rect, scope.inner.rect);
+        assert_eq!(scope.response.interact_rect, scope.inner.interact_rect);
+    });
+    output.textures_delta.clear();
 }

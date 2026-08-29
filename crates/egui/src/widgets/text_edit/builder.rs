@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use emath::{Rect, TSTransform};
+use emath::{Rect, Transform3D};
 use epaint::text::{Galley, LayoutJob, TextWrapMode, cursor::CCursor};
 
 use crate::{
@@ -780,9 +780,10 @@ impl TextEdit<'_> {
                 && ui.input(|i| i.pointer.is_moving())
             {
                 // text cursor preview:
-                let cursor_rect = TSTransform::from_translation(
-                    inner_rect.min.to_vec2() - vec2(galley.rect.left(), 0.0),
-                ) * cursor_rect(&galley, &cursor_at_pointer, row_height);
+                let cursor_origin = inner_rect.min.to_vec2() - vec2(galley.rect.left(), 0.0);
+                let cursor_rect =
+                    Transform3D::from_translation(cursor_origin.x, cursor_origin.y, 0.0)
+                        * cursor_rect(&galley, &cursor_at_pointer, row_height);
                 text_selection::visuals::paint_cursor_end(&painter, ui.visuals(), cursor_rect);
             }
 
@@ -991,7 +992,7 @@ impl TextEdit<'_> {
             id,
             cursor_range,
             role,
-            TSTransform::from_translation(galley_pos.to_vec2()),
+            Transform3D::from_translation(galley_pos.x, galley_pos.y, 0.0),
             &galley,
         );
 

@@ -3,6 +3,7 @@
 struct VertexOutput {
     @location(0) tex_coord: vec2<f32>,
     @location(1) color: vec4<f32>, // gamma 0-1
+    @location(2) local_pos: vec2<f32>,
     @builtin(position) position: vec4<f32>,
 };
 
@@ -17,6 +18,12 @@ struct Locals {
     predictable_texture_filtering: u32,
 };
 @group(0) @binding(0) var<uniform> r_locals: Locals;
+
+struct Transform {
+    matrix: mat4x4<f32>,
+    clip_rect: vec4<f32>,
+};
+@group(2) @binding(0) var<uniform> r_transform: Transform;
 
 
 // -----------------------------------------------
@@ -89,7 +96,28 @@ fn vs_main(
     var out: VertexOutput;
     out.tex_coord = a_tex_coord;
     out.color = unpack_color(a_color);
+    out.local_pos = a_pos;
     out.position = position_from_screen(a_pos);
+    return out;
+}
+
+@vertex
+fn vs_transform(
+    @location(0) a_pos: vec2<f32>,
+    @location(1) a_tex_coord: vec2<f32>,
+    @location(2) a_color: u32,
+) -> VertexOutput {
+    var out: VertexOutput;
+    out.tex_coord = a_tex_coord;
+    out.color = unpack_color(a_color);
+    out.local_pos = a_pos;
+    let transformed = r_transform.matrix * vec4<f32>(a_pos, 0.0, 1.0);
+    out.position = vec4<f32>(
+        2.0 * transformed.x / r_locals.screen_size.x - transformed.w,
+        transformed.w - 2.0 * transformed.y / r_locals.screen_size.y,
+        0.0,
+        transformed.w,
+    );
     return out;
 }
 
@@ -170,8 +198,7 @@ fn sample_texture(in: VertexOutput) -> vec4<f32> {
     }
 }
 
-@fragment
-fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+fn shade_linear_framebuffer(in: VertexOutput) -> vec4<f32> {
     // We expect "normal" textures that are NOT sRGB-aware.
     let tex_gamma = sample_texture(in);
     var out_color_gamma = in.color * tex_gamma;
@@ -187,8 +214,7 @@ fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(out_color_linear, out_color_gamma.a);
 }
 
-@fragment
-fn fs_main_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+fn shade_gamma_framebuffer(in: VertexOutput) -> vec4<f32> {
     // We expect "normal" textures that are NOT sRGB-aware.
     let tex_gamma = sample_texture(in);
     var out_color_gamma = in.color * tex_gamma;
@@ -199,4 +225,30 @@ fn fs_main_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
         out_color_gamma = vec4<f32>(out_color_gamma_rgb, out_color_gamma.a);
     }
     return out_color_gamma;
+}
+
+@fragment
+fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade_linear_framebuffer(in);
+}
+
+@fragment
+fn fs_main_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade_gamma_framebuffer(in);
+}
+
+@fragment
+fn fs_transform_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+    if any(in.local_pos < r_transform.clip_rect.xy) || any(r_transform.clip_rect.zw < in.local_pos) {
+        discard;
+    }
+    return shade_linear_framebuffer(in);
+}
+
+@fragment
+fn fs_transform_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
+    if any(in.local_pos < r_transform.clip_rect.xy) || any(r_transform.clip_rect.zw < in.local_pos) {
+        discard;
+    }
+    return shade_gamma_framebuffer(in);
 }

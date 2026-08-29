@@ -448,8 +448,8 @@ pub use epaint::emath;
 pub use ecolor::hex_color;
 pub use ecolor::{Color32, Rgba};
 pub use emath::{
-    Align, Align2, NumExt, Pos2, Rangef, Rect, RectAlign, Vec2, Vec2b, lerp, pos2, remap,
-    remap_clamp, vec2,
+    Align, Align2, NumExt, Pos2, Rangef, Rect, RectAlign, Transform3D, Vec2, Vec2b, lerp, pos2,
+    remap, remap_clamp, vec2,
 };
 pub use epaint::{
     ClippedPrimitive, ColorImage, CornerRadius, Direction, ImageData, Margin, Mesh, PaintCallback,

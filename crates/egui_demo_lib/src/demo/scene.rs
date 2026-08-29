@@ -1,4 +1,4 @@
-use egui::{Pos2, Rect, Scene, Vec2};
+use egui::{Pos2, Rect, Scene, Transform3D, Vec2};
 
 use super::widget_gallery;
 
@@ -6,6 +6,8 @@ use super::widget_gallery;
 pub struct SceneDemo {
     widget_gallery: widget_gallery::WidgetGallery,
     scene_rect: Rect,
+    tilted_enabled: bool,
+    tilted_value: f32,
 }
 
 impl Default for SceneDemo {
@@ -13,6 +15,8 @@ impl Default for SceneDemo {
         Self {
             widget_gallery: widget_gallery::WidgetGallery::default().with_date_button(false), // disable date button so that we don't fail the snapshot test
             scene_rect: Rect::ZERO, // `egui::Scene` will initialize this to something valid
+            tilted_enabled: true,
+            tilted_value: 0.0,
         }
     }
 }
@@ -46,6 +50,34 @@ impl crate::View for SceneDemo {
         ui.separator();
 
         ui.label(format!("Scene rect: {:#?}", self.scene_rect));
+
+        ui.separator();
+
+        ui.label(
+            "Transform3D keeps ordinary egui widgets interactive while projecting their paint.",
+        );
+        let pivot = ui.cursor().left_top() + Vec2::new(150.0, 80.0);
+        let angle = if self.tilted_enabled {
+            self.tilted_value
+        } else {
+            0.0
+        };
+        let transform = Transform3D::from_rotation_y(angle)
+            .with_perspective(-1.0 / 600.0)
+            .around(pivot);
+        ui.with_transform(transform, |ui| {
+            // This uses the normal widget APIs; only the scope's final presentation is transformed.
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Y-rotated controls");
+                ui.checkbox(&mut self.tilted_enabled, "Enabled");
+                ui.add(
+                    // The public Transform3D rotation constructors take radians, with zero as identity.
+                    egui::Slider::new(&mut self.tilted_value, -0.7..=0.7)
+                        .step_by(0.01)
+                        .text("Y rotation (rad)"),
+                );
+            });
+        });
 
         ui.separator();
 

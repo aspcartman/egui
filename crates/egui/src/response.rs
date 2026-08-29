@@ -456,8 +456,17 @@ impl Response {
     pub fn drag_delta(&self) -> Vec2 {
         if self.dragged() {
             let mut delta = self.ctx.input(|i| i.pointer.delta());
-            if let Some(from_global) = self.ctx.layer_transform_from_global(self.layer_id) {
-                delta *= from_global.scaling;
+            if let Some(to_global) = self.ctx.layer_transform_to_global(self.layer_id) {
+                delta = self.ctx.input(|i| {
+                    let current = i.pointer.interact_pos().unwrap_or_default();
+                    match (
+                        to_global.unproject_pos2(current),
+                        to_global.unproject_pos2(current - delta),
+                    ) {
+                        (Some(current), Some(previous)) => current - previous,
+                        _ => Vec2::ZERO,
+                    }
+                });
             }
             delta
         } else {
@@ -470,8 +479,17 @@ impl Response {
     pub fn total_drag_delta(&self) -> Option<Vec2> {
         if self.dragged() {
             let mut delta = self.ctx.input(|i| i.pointer.total_drag_delta())?;
-            if let Some(from_global) = self.ctx.layer_transform_from_global(self.layer_id) {
-                delta *= from_global.scaling;
+            if let Some(to_global) = self.ctx.layer_transform_to_global(self.layer_id) {
+                delta = self.ctx.input(|i| {
+                    let current = i.pointer.interact_pos().unwrap_or_default();
+                    match (
+                        to_global.unproject_pos2(current),
+                        to_global.unproject_pos2(current - delta),
+                    ) {
+                        (Some(current), Some(previous)) => current - previous,
+                        _ => Vec2::ZERO,
+                    }
+                });
             }
             Some(delta)
         } else {

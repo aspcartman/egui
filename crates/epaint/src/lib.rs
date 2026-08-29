@@ -121,20 +121,11 @@ pub struct ClippedShape {
     /// Only show the part of the [`Shape`] that falls within this.
     pub clip_rect: emath::Rect,
 
+    /// Transform from the local UI plane into screen coordinates.
+    pub transform: Option<emath::Transform3D>,
+
     /// The shape
     pub shape: Shape,
-}
-
-impl ClippedShape {
-    /// Transform (move/scale) the shape in-place.
-    ///
-    /// If using a [`PaintCallback`], note that only the rect is scaled as opposed
-    /// to other shapes where the stroke is also scaled.
-    pub fn transform(&mut self, transform: emath::TSTransform) {
-        let Self { clip_rect, shape } = self;
-        *clip_rect = transform * *clip_rect;
-        shape.transform(transform);
-    }
 }
 
 /// A [`Mesh`] or [`PaintCallback`] within a clip rectangle.
@@ -145,6 +136,9 @@ pub struct ClippedPrimitive {
     /// Clip / scissor rectangle.
     /// Only show the part of the [`Mesh`] that falls within this.
     pub clip_rect: emath::Rect,
+
+    /// Transform from the local UI plane into screen coordinates.
+    pub transform: Option<emath::Transform3D>,
 
     /// What to paint - either a [`Mesh`] or a [`PaintCallback`].
     pub primitive: Primitive,

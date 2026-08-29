@@ -49,7 +49,7 @@ pub struct WidgetRect {
 }
 
 impl WidgetRect {
-    pub fn transform(self, transform: emath::TSTransform) -> Self {
+    pub fn transform(self, transform: emath::Transform3D) -> Self {
         let Self {
             id,
             parent_id,
@@ -63,8 +63,10 @@ impl WidgetRect {
             id,
             parent_id,
             layer_id,
-            rect: transform * rect,
-            interact_rect: transform * interact_rect,
+            rect: transform.transform_rect(rect).unwrap_or(rect),
+            interact_rect: transform
+                .transform_rect(interact_rect)
+                .unwrap_or(interact_rect),
             sense,
             enabled,
         }

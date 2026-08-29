@@ -4,7 +4,7 @@ use emath::{GuiRounding as _, Pos2};
 
 use crate::{
     InnerResponse, LayerId, PointerButton, Rangef, Rect, Response, Sense, Ui, UiBuilder, Vec2,
-    emath::TSTransform,
+    emath::Transform3D,
 };
 
 /// Creates a transformation that fits a given scene rectangle into the available screen size.
@@ -16,7 +16,7 @@ fn fit_to_rect_in_scene(
     rect_in_global: Rect,
     rect_in_scene: Rect,
     zoom_range: Rangef,
-) -> TSTransform {
+) -> Transform3D {
     // Compute the scale factor to fit the bounding rectangle into the available screen size:
     let scale = rect_in_global.size() / rect_in_scene.size();
 
@@ -31,8 +31,12 @@ fn fit_to_rect_in_scene(
     let center_scene = rect_in_scene.center().to_vec2();
 
     // Set the transformation to scale and then translate to center.
-    TSTransform::from_translation(center_in_global - scale * center_scene)
-        * TSTransform::from_scaling(scale)
+    Transform3D::from_scale(scale, scale, 1.0)
+        * Transform3D::from_translation(
+            (center_in_global - scale * center_scene).x,
+            (center_in_global - scale * center_scene).y,
+            0.0,
+        )
 }
 
 /// A container that allows you to zoom and pan.
@@ -148,8 +152,9 @@ impl Scene {
 
         let mut to_global = fit_to_rect_in_scene(outer_rect, *scene_rect, self.zoom_range);
 
-        let scene_rect_was_good =
-            to_global.is_valid() && scene_rect.is_finite() && scene_rect.size() != Vec2::ZERO;
+        let scene_rect_was_good = to_global.inverse().is_some()
+            && scene_rect.is_finite()
+            && scene_rect.size() != Vec2::ZERO;
 
         let mut inner_rect = *scene_rect;
 
@@ -162,14 +167,20 @@ impl Scene {
         if ret.response.changed() {
             // Only update if changed, both to avoid numeric drift,
             // and to avoid expanding the scene rect unnecessarily.
-            *scene_rect = to_global.inverse() * outer_rect;
+            *scene_rect = to_global
+                .inverse()
+                .and_then(|t| t.transform_rect(outer_rect))
+                .unwrap_or(*scene_rect);
         }
 
         if !scene_rect_was_good {
             // Auto-reset if the transformation goes bad somehow (or started bad).
             // Recalculates transform based on inner_rect, resulting in a rect that's the full size of outer_rect but centered on inner_rect.
             let to_global = fit_to_rect_in_scene(outer_rect, inner_rect, self.zoom_range);
-            *scene_rect = to_global.inverse() * outer_rect;
+            *scene_rect = to_global
+                .inverse()
+                .and_then(|t| t.transform_rect(outer_rect))
+                .unwrap_or(*scene_rect);
         }
 
         ret
@@ -179,7 +190,7 @@ impl Scene {
         &self,
         parent_ui: &mut Ui,
         outer_rect: Rect,
-        to_global: &mut TSTransform,
+        to_global: &mut Transform3D,
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> InnerResponse<R> {
         // Create a new egui paint layer, where we can draw our contents:
@@ -206,7 +217,12 @@ impl Scene {
         self.register_pan_and_zoom(&local_ui, &mut pan_response, to_global);
 
         // Set a correct global clip rect:
-        local_ui.set_clip_rect(to_global.inverse() * outer_rect);
+        local_ui.set_clip_rect(
+            to_global
+                .inverse()
+                .and_then(|t| t.transform_rect(outer_rect))
+                .unwrap_or(Rect::NOTHING),
+        );
 
         // Tell egui to apply the transform on the layer:
         local_ui
@@ -217,7 +233,13 @@ impl Scene {
         let ret = add_contents(&mut local_ui);
 
         // This ensures we catch clicks/drags/pans anywhere on the background.
-        local_ui.force_set_min_rect((to_global.inverse() * outer_rect).round_ui());
+        local_ui.force_set_min_rect(
+            to_global
+                .inverse()
+                .and_then(|t| t.transform_rect(outer_rect))
+                .unwrap_or(Rect::NOTHING)
+                .round_ui(),
+        );
 
         InnerResponse {
             response: pan_response,
@@ -226,7 +248,7 @@ impl Scene {
     }
 
     /// Helper function to handle pan and zoom interactions on a response.
-    pub fn register_pan_and_zoom(&self, ui: &Ui, resp: &mut Response, to_global: &mut TSTransform) {
+    pub fn register_pan_and_zoom(&self, ui: &Ui, resp: &mut Response, to_global: &mut Transform3D) {
         let dragged = self.drag_pan_buttons.iter().any(|button| match button {
             DragPanButtons::PRIMARY => resp.dragged_by(PointerButton::Primary),
             DragPanButtons::SECONDARY => resp.dragged_by(PointerButton::Secondary),
@@ -236,14 +258,16 @@ impl Scene {
             _ => false,
         });
         if dragged {
-            to_global.translation += to_global.scaling * resp.drag_delta();
+            *to_global =
+                Transform3D::from_translation(resp.drag_delta().x, resp.drag_delta().y, 0.0)
+                    * *to_global;
             resp.mark_changed();
         }
 
         if let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos())
             && resp.contains_pointer()
         {
-            let pointer_in_scene = to_global.inverse() * mouse_pos;
+            let pointer_in_scene = to_global.unproject_pos2(mouse_pos).unwrap_or(mouse_pos);
             let zoom_delta = ui.input(|i| i.zoom_delta());
             let pan_delta = ui.input(|i| i.smooth_scroll_delta());
 
@@ -254,24 +278,53 @@ impl Scene {
             }
 
             if zoom_delta != 1.0 {
+                let (current_zoom, _) = to_global.scale_2d();
                 // Zoom in on pointer, but only if we are not zoomed in or out too far.
                 let zoom_delta = zoom_delta.clamp(
-                    self.zoom_range.min / to_global.scaling,
-                    self.zoom_range.max / to_global.scaling,
+                    self.zoom_range.min / current_zoom,
+                    self.zoom_range.max / current_zoom,
                 );
 
-                *to_global = *to_global
-                    * TSTransform::from_translation(pointer_in_scene.to_vec2())
-                    * TSTransform::from_scaling(zoom_delta)
-                    * TSTransform::from_translation(-pointer_in_scene.to_vec2());
+                *to_global =
+                    Transform3D::from_translation(-pointer_in_scene.x, -pointer_in_scene.y, 0.0)
+                        * Transform3D::from_scale(zoom_delta, zoom_delta, 1.0)
+                        * Transform3D::from_translation(
+                            pointer_in_scene.x,
+                            pointer_in_scene.y,
+                            0.0,
+                        )
+                        * *to_global;
 
                 // Clamp to exact zoom range.
-                to_global.scaling = self.zoom_range.clamp(to_global.scaling);
+                let (current_zoom, _) = to_global.scale_2d();
+                let current_zoom = self.zoom_range.clamp(current_zoom);
+                *to_global = to_global.with_scale_2d(current_zoom, current_zoom);
             }
 
             // Pan:
-            *to_global = TSTransform::from_translation(pan_delta) * *to_global;
+            *to_global = *to_global * Transform3D::from_translation(pan_delta.x, pan_delta.y, 0.0);
             resp.mark_changed();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_keeps_the_pointer_fixed() {
+        let pointer_in_scene = Pos2::new(5.0, 4.0);
+        let to_global = Transform3D::from_scale(2.0, 2.0, 1.0)
+            * Transform3D::from_translation(100.0, 50.0, 0.0);
+        let pointer_in_global = to_global * pointer_in_scene;
+
+        // A scene-local zoom must happen before the scene-to-global transform.
+        let zoomed = Transform3D::from_translation(-pointer_in_scene.x, -pointer_in_scene.y, 0.0)
+            * Transform3D::from_scale(1.5, 1.5, 1.0)
+            * Transform3D::from_translation(pointer_in_scene.x, pointer_in_scene.y, 0.0)
+            * to_global;
+
+        assert_eq!(zoomed * pointer_in_scene, pointer_in_global);
     }
 }

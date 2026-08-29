@@ -3,7 +3,7 @@
 use core::num::NonZeroUsize;
 
 use ahash::{HashMap, HashSet};
-use epaint::emath::TSTransform;
+use epaint::emath::Transform3D;
 
 use crate::{
     EventFilter, Id, IdMap, LayerId, Order, Pos2, Rangef, RawInput, Rect, Style, Vec2, ViewportId,
@@ -96,7 +96,7 @@ pub struct Memory {
     /// * [`crate::Context::set_transform_layer`]
     /// * [`crate::Context::layer_transform_to_global`]
     /// * [`crate::Context::layer_transform_from_global`]
-    pub to_global: HashMap<LayerId, TSTransform>,
+    pub to_global: HashMap<LayerId, Transform3D>,
 
     // -------------------------------------------------
     // Per-viewport:
@@ -1245,7 +1245,7 @@ impl Areas {
     pub fn layer_id_at(
         &self,
         pos: Pos2,
-        layer_to_global: &HashMap<LayerId, TSTransform>,
+        layer_to_global: &HashMap<LayerId, Transform3D>,
     ) -> Option<LayerId> {
         for layer in self.order.iter().rev() {
             if self.is_visible(layer)

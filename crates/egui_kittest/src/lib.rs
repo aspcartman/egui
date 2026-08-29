@@ -632,6 +632,7 @@ impl<'a, State> Harness<'a, State> {
     pub fn mask(&mut self, rect: Rect) {
         self.output.shapes.push(ClippedShape {
             clip_rect: Rect::EVERYTHING,
+            transform: None,
             shape: Shape::Rect(RectShape::filled(rect, 0.0, Color32::MAGENTA)),
         });
     }
@@ -654,6 +655,7 @@ impl<'a, State> Harness<'a, State> {
 
             output.shapes.push(ClippedShape {
                 clip_rect: self.ctx.content_rect(),
+                transform: None,
                 shape: egui::epaint::PathShape::convex_polygon(
                     triangle,
                     Color32::WHITE,

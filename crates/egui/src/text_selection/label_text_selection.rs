@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use emath::TSTransform;
+use emath::Transform3D;
 
 use crate::{
     Context, CursorIcon, Event, Galley, Id, LayerId, Plugin, Pos2, Rect, Response, Ui,
@@ -30,7 +30,7 @@ impl WidgetTextCursor {
     fn new(
         widget_id: Id,
         cursor: impl Into<CCursor>,
-        global_from_galley: TSTransform,
+        global_from_galley: Transform3D,
         galley: &Galley,
     ) -> Self {
         let ccursor = cursor.into();
@@ -335,7 +335,7 @@ impl ViewportLabelSelectionState {
         &mut self,
         ui: &Ui,
         response: &Response,
-        global_from_galley: TSTransform,
+        global_from_galley: Transform3D,
         galley: &Galley,
     ) -> TextCursorState {
         let Some(selection) = &mut self.selection else {
@@ -347,8 +347,6 @@ impl ViewportLabelSelectionState {
             // Selection is in another layer
             return TextCursorState::default();
         }
-
-        let galley_from_global = global_from_galley.inverse();
 
         let multi_widget_text_select = ui.style().interaction.multi_widget_text_select;
 
@@ -373,7 +371,14 @@ impl ViewportLabelSelectionState {
 
             let new_primary = if response.contains_pointer() {
                 // Dragging into this widget - easy case:
-                Some(galley.cursor_from_pos((galley_from_global * pointer_pos).to_vec2()))
+                Some(
+                    galley.cursor_from_pos(
+                        global_from_galley
+                            .unproject_pos2(pointer_pos)
+                            .unwrap_or(Pos2::NAN)
+                            .to_vec2(),
+                    ),
+                )
             } else if is_in_same_column
                 && !self.has_reached_primary
                 && selection.primary.pos.y <= selection.secondary.pos.y
@@ -531,11 +536,17 @@ impl ViewportLabelSelectionState {
             .ctx()
             .layer_transform_to_global(ui.layer_id())
             .unwrap_or_default();
-        let layer_from_galley = TSTransform::from_translation(galley_pos_in_layer.to_vec2());
-        let galley_from_layer = layer_from_galley.inverse();
-        let layer_from_global = global_from_layer.inverse();
-        let galley_from_global = galley_from_layer * layer_from_global;
+        let layer_from_galley =
+            Transform3D::from_translation(galley_pos_in_layer.x, galley_pos_in_layer.y, 0.0);
         let global_from_galley = global_from_layer * layer_from_galley;
+        let global_from_galley = if global_from_galley
+            .transform_rect(Rect::from_min_size(Pos2::ZERO, galley.size()))
+            .is_some()
+        {
+            global_from_galley
+        } else {
+            layer_from_galley
+        };
 
         if response.hovered() {
             ui.set_cursor_icon(CursorIcon::Text);
@@ -553,8 +564,12 @@ impl ViewportLabelSelectionState {
         if let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && response.contains_pointer()
         {
-            let cursor_at_pointer =
-                galley.cursor_from_pos((galley_from_global * pointer_pos).to_vec2());
+            let cursor_at_pointer = galley.cursor_from_pos(
+                global_from_galley
+                    .unproject_pos2(pointer_pos)
+                    .unwrap_or(Pos2::NAN)
+                    .to_vec2(),
+            );
 
             // This is where we handle start-of-drag and double-click-to-select.
             // Actual drag-to-select happens elsewhere.
