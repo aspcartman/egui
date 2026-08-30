@@ -7,7 +7,7 @@ use emath::GuiRounding as _;
 use epaint::{
     ClippedPrimitive, ClippedShape, Color32, ImageData, Pos2, Rect, StrokeKind,
     TessellationOptions, TextureId, Vec2,
-    emath::{self, TSTransform},
+    emath::{self, Transform3D},
     mutex::RwLock,
     stats::PaintStats,
     tessellator,
@@ -1541,7 +1541,7 @@ impl Context {
                 || res.drag_stopped();
             if is_interacted_with && let Some(mut pos) = input.pointer.interact_pos() {
                 if let Some(to_global) = memory.to_global.get(&res.layer_id) {
-                    pos = to_global.inverse() * pos;
+                    pos = to_global.unproject_pos2(pos).unwrap_or(Pos2::NAN);
                 }
                 res.interact_pointer_pos_or_nan = pos;
             }
@@ -3162,11 +3162,11 @@ impl Context {
     ///
     /// Can be used to implement pan and zoom (see relevant demo).
     ///
-    /// For a temporary transform, use [`Self::transform_layer_shapes`] or
-    /// [`Ui::with_visual_transform`].
-    pub fn set_transform_layer(&self, layer_id: LayerId, transform: TSTransform) {
+    /// For a temporary transform, use [`Ui::with_transform`].
+    ///
+    pub fn set_transform_layer(&self, layer_id: LayerId, transform: Transform3D) {
         self.memory_mut(|m| {
-            if transform == TSTransform::IDENTITY {
+            if transform.is_identity() {
                 m.to_global.remove(&layer_id)
             } else {
                 m.to_global.insert(layer_id, transform)
@@ -3177,29 +3177,15 @@ impl Context {
     /// Return how to transform the graphics of the given layer into the global coordinate system.
     ///
     /// Set this with [`Self::layer_transform_to_global`].
-    pub fn layer_transform_to_global(&self, layer_id: LayerId) -> Option<TSTransform> {
+    pub fn layer_transform_to_global(&self, layer_id: LayerId) -> Option<Transform3D> {
         self.memory(|m| m.to_global.get(&layer_id).copied())
     }
 
     /// Return how to transform the graphics of the global coordinate system into the local coordinate system of the given layer.
     ///
     /// This returns the inverse of [`Self::layer_transform_to_global`].
-    pub fn layer_transform_from_global(&self, layer_id: LayerId) -> Option<TSTransform> {
-        self.layer_transform_to_global(layer_id)
-            .map(|t| t.inverse())
-    }
-
-    /// Transform all the graphics at the given layer.
-    ///
-    /// Is used to implement drag-and-drop preview.
-    ///
-    /// This only applied to the existing graphics at the layer, not to new graphics added later.
-    ///
-    /// For a persistent transform, use [`Self::set_transform_layer`] instead.
-    pub fn transform_layer_shapes(&self, layer_id: LayerId, transform: TSTransform) {
-        if transform != TSTransform::IDENTITY {
-            self.graphics_mut(|g| g.entry(layer_id).transform(transform));
-        }
+    pub fn layer_transform_from_global(&self, layer_id: LayerId) -> Option<Transform3D> {
+        self.layer_transform_to_global(layer_id)?.inverse()
     }
 
     /// Top-most layer at the given position.
@@ -3238,21 +3224,22 @@ impl Context {
     ///
     /// See also [`Response::contains_pointer`].
     pub fn rect_contains_pointer(&self, layer_id: LayerId, rect: Rect) -> bool {
-        let rect = if let Some(to_global) = self.layer_transform_to_global(layer_id) {
-            to_global * rect
-        } else {
-            rect
-        };
-        if !rect.is_positive() {
-            return false;
-        }
-
         let pointer_pos = self.input(|i| i.pointer.interact_pos());
         let Some(pointer_pos) = pointer_pos else {
             return false;
         };
 
-        if !rect.contains(pointer_pos) {
+        let pointer_in_layer = if let Some(to_global) = self.layer_transform_to_global(layer_id) {
+            // Test in local coordinates so a rotated rectangle does not act like its projected AABB.
+            let Some(pointer_in_layer) = to_global.unproject_pos2(pointer_pos) else {
+                return false;
+            };
+            pointer_in_layer
+        } else {
+            pointer_pos
+        };
+
+        if !rect.contains(pointer_in_layer) {
             return false;
         }
 
@@ -4468,6 +4455,7 @@ fn warn_if_rect_changes_id(
             );
             out_shapes.push(ClippedShape {
                 clip_rect: Rect::EVERYTHING,
+                transform: None,
                 shape: epaint::Shape::rect_stroke(
                     rect,
                     0,

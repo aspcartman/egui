@@ -1,6 +1,6 @@
 use ahash::HashMap;
 
-use emath::TSTransform;
+use emath::Transform3D;
 
 use crate::{LayerId, Pos2, Sense, WidgetRect, WidgetRects, emath, id::IdSet};
 
@@ -42,7 +42,7 @@ pub struct WidgetHits {
 pub fn hit_test(
     widgets: &WidgetRects,
     layer_order: &[LayerId],
-    layer_to_global: &HashMap<LayerId, TSTransform>,
+    layer_to_global: &HashMap<LayerId, Transform3D>,
     pos: Pos2,
     search_radius: f32,
 ) -> WidgetHits {
@@ -53,7 +53,9 @@ pub fn hit_test(
     // Transform the position into the local coordinate space of each layer:
     let pos_in_layers: HashMap<LayerId, Pos2> = layer_to_global
         .iter()
-        .map(|(layer_id, to_global)| (*layer_id, to_global.inverse() * pos))
+        .filter_map(|(layer_id, to_global)| {
+            to_global.unproject_pos2(pos).map(|pos| (*layer_id, pos))
+        })
         .collect();
 
     let mut closest_dist_sq = f32::INFINITY;
@@ -69,7 +71,13 @@ pub fn hit_test(
                 return false;
             }
 
-            let pos_in_layer = pos_in_layers.get(&w.layer_id).copied().unwrap_or(pos);
+            let Some(pos_in_layer) = (match layer_to_global.get(&w.layer_id) {
+                Some(_) => pos_in_layers.get(&w.layer_id).copied(),
+                None => Some(pos),
+            }) else {
+                // A transform without a local preimage cannot receive pointer input.
+                return false;
+            };
             // TODO(emilk): we should probably do the distance testing in global space instead
             let dist_sq = w.interact_rect.distance_sq_to_pos(pos_in_layer);
 
@@ -86,7 +94,10 @@ pub fn hit_test(
 
     // Transform to global coordinates:
     for hit in &mut close {
-        if let Some(to_global) = layer_to_global.get(&hit.layer_id).copied() {
+        if let Some(to_global) = layer_to_global.get(&hit.layer_id).copied()
+            && to_global.transform_rect(hit.interact_rect).is_some()
+            && pos_in_layers.contains_key(&hit.layer_id)
+        {
             *hit = hit.transform(to_global);
         }
     }
@@ -441,7 +452,7 @@ mod tests {
 
     use emath::{Rect, pos2, vec2};
 
-    use crate::{Id, Sense};
+    use crate::{Id, InteractOptions, Sense, WidgetRects};
 
     use super::*;
 
@@ -546,5 +557,24 @@ mod tests {
         let hits = hit_test_on_close(&widgets, pos2(65.0, 50.0));
         assert_eq!(hits.click.unwrap().id, Id::new("fg-right-label"));
         assert_eq!(hits.drag.unwrap().id, Id::new("fg-right-label"));
+    }
+
+    #[test]
+    fn collapsed_ui_transforms_do_not_receive_input() {
+        let layer_id = LayerId::background();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 10.0));
+
+        let mut widgets = WidgetRects::default();
+        widgets.insert(
+            layer_id,
+            wr(Id::new("transformed-button"), Sense::click(), rect),
+            InteractOptions::default(),
+        );
+
+        let mut transforms = HashMap::default();
+        transforms.insert(layer_id, Transform3D::from_scale(0.0, 1.0, 1.0));
+        let hits = hit_test(&widgets, &[layer_id], &transforms, pos2(5.0, 5.0), 0.0);
+        assert!(hits.close.is_empty());
+        assert_eq!(hits.click, None);
     }
 }

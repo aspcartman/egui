@@ -1,5 +1,5 @@
 use crate::{Color32, TextureId, WHITE_UV, emath};
-use emath::{Pos2, Rect, Rot2, TSTransform, Vec2};
+use emath::{Pos2, Rect, Rot2, Vec2};
 
 /// The 2D vertex type.
 ///
@@ -309,13 +309,6 @@ impl Mesh {
     pub fn translate(&mut self, delta: Vec2) {
         for v in &mut self.vertices {
             v.pos += delta;
-        }
-    }
-
-    /// Transform the mesh in-place with the given transform.
-    pub fn transform(&mut self, transform: TSTransform) {
-        for v in &mut self.vertices {
-            v.pos = transform * v.pos;
         }
     }
 

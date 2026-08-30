@@ -152,6 +152,14 @@ struct UniformBuffer {
     predictable_texture_filtering: u32,
 }
 
+/// Per-mesh transform data. Matrices are transposed from Core Animation row-vector form.
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct TransformUniform {
+    matrix: [[f32; 4]; 4],
+    clip_rect: [f32; 4],
+}
+
 struct SlicedBuffer {
     buffer: wgpu::Buffer,
     slices: Vec<Range<usize>>,
@@ -236,6 +244,7 @@ impl Default for RendererOptions {
 /// Renderer for a egui based GUI.
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
+    transform_pipeline: wgpu::RenderPipeline,
 
     index_buffer: SlicedBuffer,
     vertex_buffer: SlicedBuffer,
@@ -244,6 +253,13 @@ pub struct Renderer {
     previous_uniform_buffer_content: UniformBuffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
+
+    transform_buffer: wgpu::Buffer,
+    transform_buffer_capacity: wgpu::BufferAddress,
+    transform_alignment: usize,
+    transform_bind_group: wgpu::BindGroup,
+    transform_bind_group_layout: wgpu::BindGroupLayout,
+    transform_offsets: Vec<Option<u32>>,
 
     /// Uniform buffers each holding a single `u32` of texture flags
     /// (see [`texture_flags`]), indexed by that flag value.
@@ -377,6 +393,45 @@ impl Renderer {
             })
         });
 
+        let transform_alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
+        let transform_buffer_capacity =
+            transform_alignment.max(core::mem::size_of::<TransformUniform>()) as u64;
+        let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("egui_transform_buffer"),
+            size: transform_buffer_capacity,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let transform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("egui_transform_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: NonZeroU64::new(
+                            core::mem::size_of::<TransformUniform>() as u64
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+        let transform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("egui_transform_bind_group"),
+            layout: &transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                // Dynamic offsets select one transform from this shared buffer.
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &transform_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(core::mem::size_of::<TransformUniform>() as u64),
+                }),
+            }],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("egui_pipeline_layout"),
             bind_group_layouts: &[
@@ -385,6 +440,16 @@ impl Renderer {
             ],
             immediate_size: 0,
         });
+        let transform_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("egui_transform_pipeline_layout"),
+                bind_group_layouts: &[
+                    Some(&uniform_bind_group_layout),
+                    Some(&texture_bind_group_layout),
+                    Some(&transform_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
 
         let depth_stencil = options
             .depth_stencil_format
@@ -423,7 +488,7 @@ impl Renderer {
                     polygon_mode: wgpu::PolygonMode::default(),
                     strip_index_format: None,
                 },
-                depth_stencil,
+                depth_stencil: depth_stencil.clone(),
                 multisample: wgpu::MultisampleState {
                     alpha_to_coverage_enabled: false,
                     count: options.msaa_samples.max(1),
@@ -462,6 +527,63 @@ impl Renderer {
         )
         };
 
+        let transform_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("egui_transform_pipeline"),
+            layout: Some(&transform_pipeline_layout),
+            vertex: wgpu::VertexState {
+                entry_point: Some("vs_transform"),
+                module: &module,
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 5 * 4,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32],
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                unclipped_depth: false,
+                conservative: false,
+                cull_mode: None,
+                front_face: wgpu::FrontFace::default(),
+                polygon_mode: wgpu::PolygonMode::default(),
+                strip_index_format: None,
+            },
+            depth_stencil,
+            multisample: wgpu::MultisampleState {
+                alpha_to_coverage_enabled: false,
+                count: options.msaa_samples.max(1),
+                mask: !0,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some(if output_color_format.is_srgb() {
+                    "fs_transform_linear_framebuffer"
+                } else {
+                    "fs_transform_gamma_framebuffer"
+                }),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_color_format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         const VERTEX_BUFFER_START_CAPACITY: wgpu::BufferAddress =
             (core::mem::size_of::<Vertex>() * 1024) as _;
         const INDEX_BUFFER_START_CAPACITY: wgpu::BufferAddress =
@@ -469,6 +591,7 @@ impl Renderer {
 
         Self {
             pipeline,
+            transform_pipeline,
             vertex_buffer: SlicedBuffer {
                 buffer: create_vertex_buffer(device, VERTEX_BUFFER_START_CAPACITY),
                 slices: Vec::with_capacity(64),
@@ -484,6 +607,12 @@ impl Renderer {
             previous_uniform_buffer_content: UniformBuffer::zeroed(),
             uniform_bind_group,
             texture_bind_group_layout,
+            transform_buffer,
+            transform_buffer_capacity,
+            transform_alignment,
+            transform_bind_group,
+            transform_bind_group_layout,
+            transform_offsets: Vec::with_capacity(64),
             texture_flag_buffers,
             textures: HashMap::default(),
             next_user_texture_id: 0,
@@ -501,8 +630,9 @@ impl Renderer {
     /// The only consequence of `forget_lifetime` is that any operation on the parent encoder will cause a runtime error
     /// instead of a compile time error.
     ///
-    /// # Panic
-    /// Always ensure that [`Renderer::update_buffers`] has been called otherwise calling [`Renderer::render`] will panic!
+    /// Call [`Renderer::update_buffers`] before rendering the same paint jobs.
+    ///
+    /// If the uploaded data does not match the paint jobs, rendering is skipped and an error is logged.
     pub fn render(
         &self,
         render_pass: &mut wgpu::RenderPass<'static>,
@@ -513,19 +643,40 @@ impl Renderer {
 
         let pixels_per_point = screen_descriptor.pixels_per_point;
         let size_in_pixels = screen_descriptor.size_in_pixels;
+        let mesh_count = paint_jobs
+            .iter()
+            .filter(|paint_job| matches!(paint_job.primitive, Primitive::Mesh(_)))
+            .count();
+        if self.transform_offsets.len() != mesh_count
+            || self.index_buffer.slices.len() != mesh_count
+            || self.vertex_buffer.slices.len() != mesh_count
+        {
+            log::error!("egui_wgpu::Renderer::render called without matching uploaded mesh data");
+            return;
+        }
 
         // Whether or not we need to reset the render pass because a paint callback has just
         // run.
         let mut needs_reset = true;
 
-        let mut index_buffer_slices = self.index_buffer.slices.iter();
-        let mut vertex_buffer_slices = self.vertex_buffer.slices.iter();
+        let mut mesh_index = 0;
 
         for epaint::ClippedPrimitive {
             clip_rect,
+            transform,
             primitive,
         } in paint_jobs
         {
+            let current_mesh_index = if matches!(primitive, Primitive::Mesh(_)) {
+                let current_mesh_index = mesh_index;
+                mesh_index += 1;
+                Some(current_mesh_index)
+            } else {
+                None
+            };
+            let transform_offset =
+                current_mesh_index.and_then(|index| self.transform_offsets[index]);
+
             if needs_reset {
                 render_pass.set_viewport(
                     0.0,
@@ -541,19 +692,21 @@ impl Renderer {
             }
 
             {
-                let rect = ScissorRect::new(clip_rect, pixels_per_point, size_in_pixels);
+                let projected_clip_rect =
+                    if let (Some(transform), Some(_)) = (transform, transform_offset) {
+                        // A large ancestor clip may cross the perspective horizon while this mesh
+                        // remains fully in front of it. The fragment shader still applies the
+                        // exact local clip, so use the full scissor instead of losing the mesh.
+                        transform
+                            .transform_rect(*clip_rect)
+                            .unwrap_or(epaint::Rect::EVERYTHING)
+                    } else {
+                        *clip_rect
+                    };
+                let rect = ScissorRect::new(&projected_clip_rect, pixels_per_point, size_in_pixels);
 
                 if rect.width == 0 || rect.height == 0 {
                     // Skip rendering zero-sized clip areas.
-                    if let Primitive::Mesh(_) = primitive {
-                        // If this is a mesh, we need to advance the index and vertex buffer iterators:
-                        index_buffer_slices
-                            .next()
-                            .expect("You must call .update_buffers() before .render()");
-                        vertex_buffer_slices
-                            .next()
-                            .expect("You must call .update_buffers() before .render()");
-                    }
                     continue;
                 }
 
@@ -562,15 +715,27 @@ impl Renderer {
 
             match primitive {
                 Primitive::Mesh(mesh) => {
-                    let index_buffer_slice = index_buffer_slices
-                        .next()
-                        .expect("You must call .update_buffers() before .render()");
-                    let vertex_buffer_slice = vertex_buffer_slices
-                        .next()
-                        .expect("You must call .update_buffers() before .render()");
+                    let Some(mesh_index) = current_mesh_index else {
+                        log::error!("egui_wgpu::Renderer::render lost a mesh index");
+                        return;
+                    };
+                    if transform_offset.is_some() {
+                        render_pass.set_pipeline(&self.transform_pipeline);
+                    } else {
+                        render_pass.set_pipeline(&self.pipeline);
+                    }
+                    let index_buffer_slice = &self.index_buffer.slices[mesh_index];
+                    let vertex_buffer_slice = &self.vertex_buffer.slices[mesh_index];
 
                     if let Some(Texture { bind_group, .. }) = self.textures.get(&mesh.texture_id) {
                         render_pass.set_bind_group(1, bind_group, &[]);
+                        if let Some(transform_offset) = transform_offset {
+                            render_pass.set_bind_group(
+                                2,
+                                &self.transform_bind_group,
+                                &[transform_offset],
+                            );
+                        }
                         render_pass.set_index_buffer(
                             self.index_buffer.buffer.slice(
                                 index_buffer_slice.start as u64..index_buffer_slice.end as u64,
@@ -589,6 +754,10 @@ impl Renderer {
                     }
                 }
                 Primitive::Callback(callback) => {
+                    if transform.is_some() {
+                        log::warn!("PaintCallback inside Transform3D scope is unsupported");
+                        continue;
+                    }
                     let Some(cbfn) = callback.callback.downcast_ref::<Callback>() else {
                         // We already warned in the `prepare` callback
                         continue;
@@ -986,6 +1155,74 @@ impl Renderer {
                 bytemuck::cast_slice(&[uniform_buffer_content]),
             );
             self.previous_uniform_buffer_content = uniform_buffer_content;
+        }
+
+        // Each mesh gets a dynamic uniform slot. This keeps the public vertex format unchanged.
+        self.transform_offsets.clear();
+        let mut transform_data = Vec::new();
+        let mut transform_count: usize = 0;
+        for clipped_primitive in paint_jobs {
+            let Primitive::Mesh(_) = &clipped_primitive.primitive else {
+                continue;
+            };
+            let Some(transform) = clipped_primitive
+                .transform
+                .filter(|transform| !transform.is_identity())
+            else {
+                self.transform_offsets.push(None);
+                continue;
+            };
+
+            let Some(offset) = transform_count
+                .checked_mul(self.transform_alignment)
+                .and_then(|offset| u32::try_from(offset).ok())
+            else {
+                log::warn!("Ignoring a Transform3D that exceeds WGPU dynamic uniform offsets");
+                self.transform_offsets.push(None);
+                continue;
+            };
+            let offset = offset as usize;
+            transform_data.resize(offset + self.transform_alignment, 0);
+            let uniform = TransformUniform {
+                // WGSL matrices are column-major, so Core Animation rows are its columns.
+                matrix: transform.as_rows(),
+                clip_rect: [
+                    clipped_primitive.clip_rect.min.x,
+                    clipped_primitive.clip_rect.min.y,
+                    clipped_primitive.clip_rect.max.x,
+                    clipped_primitive.clip_rect.max.y,
+                ],
+            };
+            transform_data[offset..offset + core::mem::size_of::<TransformUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(&uniform));
+            self.transform_offsets.push(Some(offset as u32));
+            transform_count += 1;
+        }
+        if self.transform_buffer_capacity < transform_data.len() as u64 {
+            self.transform_buffer_capacity =
+                (self.transform_buffer_capacity * 2).at_least(transform_data.len() as u64);
+            self.transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("egui_transform_buffer"),
+                size: self.transform_buffer_capacity,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.transform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("egui_transform_bind_group"),
+                layout: &self.transform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    // Keep the dynamic binding window at one matrix after a buffer resize too.
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.transform_buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(core::mem::size_of::<TransformUniform>() as u64),
+                    }),
+                }],
+            });
+        }
+        if transform_count > 0 {
+            queue.write_buffer(&self.transform_buffer, 0, &transform_data);
         }
 
         // Determine how many vertices & indices need to be rendered, and gather prepare callbacks

@@ -1,4 +1,4 @@
-use emath::TSTransform;
+use emath::Transform3D;
 use epaint::text::CharIndex;
 
 use crate::{Context, Galley, Id};
@@ -32,7 +32,7 @@ pub fn update_accesskit_for_text_widget(
     widget_id: Id,
     cursor_range: Option<CCursorRange>,
     role: accesskit::Role,
-    global_from_galley: TSTransform,
+    global_from_galley: Transform3D,
     galley: &Galley,
 ) {
     let parent_id = ctx.accesskit_node_builder(widget_id, |builder| {

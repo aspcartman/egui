@@ -1354,15 +1354,25 @@ impl Tessellator {
         clipped_shape: ClippedShape,
         out_primitives: &mut Vec<ClippedPrimitive>,
     ) {
-        let ClippedShape { clip_rect, shape } = clipped_shape;
-
+        let ClippedShape {
+            clip_rect,
+            transform,
+            shape,
+        } = clipped_shape;
         if !clip_rect.is_positive() {
             return; // skip empty clip rectangles
         }
 
         if let Shape::Vec(shapes) = shape {
             for shape in shapes {
-                self.tessellate_clipped_shape(ClippedShape { clip_rect, shape }, out_primitives);
+                self.tessellate_clipped_shape(
+                    ClippedShape {
+                        clip_rect,
+                        transform,
+                        shape,
+                    },
+                    out_primitives,
+                );
             }
             return;
         }
@@ -1370,6 +1380,7 @@ impl Tessellator {
         if let Shape::Callback(callback) = shape {
             out_primitives.push(ClippedPrimitive {
                 clip_rect,
+                transform,
                 primitive: Primitive::Callback(callback),
             });
             return;
@@ -1379,6 +1390,7 @@ impl Tessellator {
             None => true,
             Some(output_clipped_primitive) => {
                 output_clipped_primitive.clip_rect != clip_rect
+                    || output_clipped_primitive.transform != transform
                     || match &output_clipped_primitive.primitive {
                         Primitive::Mesh(output_mesh) => {
                             output_mesh.texture_id != shape.texture_id()
@@ -1391,6 +1403,7 @@ impl Tessellator {
         if start_new_mesh {
             out_primitives.push(ClippedPrimitive {
                 clip_rect,
+                transform,
                 primitive: Primitive::Mesh(Mesh::default()),
             });
         }
@@ -2240,9 +2253,9 @@ impl Tessellator {
             }
         }
 
-        clipped_primitives.retain(|p| {
-            p.clip_rect.is_positive()
-                && match &p.primitive {
+        clipped_primitives.retain(|primitive| {
+            primitive.clip_rect.is_positive()
+                && match &primitive.primitive {
                     Primitive::Mesh(mesh) => !mesh.is_empty(),
                     Primitive::Callback(_) => true,
                 }
@@ -2331,6 +2344,7 @@ impl Tessellator {
                     clipped_primitive,
                     ClippedPrimitive {
                         clip_rect: Rect::EVERYTHING, // whatever
+                        transform: None,
                         primitive: Primitive::Mesh(clip_rect_mesh),
                     },
                 ]
@@ -2359,6 +2373,7 @@ fn test_tessellator() {
     let shape = Shape::Vec(shapes);
     let clipped_shapes = vec![ClippedShape {
         clip_rect: rect,
+        transform: None,
         shape,
     }];
 
@@ -2369,6 +2384,33 @@ fn test_tessellator() {
         .tessellate_shapes(clipped_shapes);
 
     assert_eq!(primitives.len(), 2);
+}
+
+#[test]
+fn tessellator_keeps_projective_meshes() {
+    use crate::*;
+
+    let rect = Rect::from_min_max(pos2(-2.0, 0.0), pos2(1.0, 1.0));
+    let mut mesh = Mesh::default();
+    mesh.add_rect_with_uv(rect, Rect::EVERYTHING, Color32::WHITE);
+
+    let primitives = Tessellator::new(1.0, Default::default(), [1024, 1024], vec![])
+        .tessellate_shapes(vec![ClippedShape {
+            clip_rect: rect,
+            transform: Some(
+                emath::Transform3D::try_from_rows([
+                    [1.0, 0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ])
+                .unwrap(),
+            ),
+            shape: Shape::mesh(mesh),
+        }]);
+
+    assert_eq!(primitives.len(), 1);
+    assert!(primitives[0].transform.is_some());
 }
 
 #[test]

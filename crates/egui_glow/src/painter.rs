@@ -410,9 +410,14 @@ impl Painter {
 
         for egui::ClippedPrimitive {
             clip_rect,
+            transform,
             primitive,
         } in clipped_primitives
         {
+            if transform.is_some() {
+                log::warn!("Transform3D rendering is unsupported by egui_glow");
+                continue;
+            }
             set_clip_rect(&self.gl, screen_size_px, pixels_per_point, *clip_rect);
 
             match primitive {

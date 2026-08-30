@@ -2,7 +2,7 @@
 //! are sometimes painted behind or in front of other things.
 
 use crate::{Id, IdMap, Rect, epaint};
-use epaint::{ClippedShape, Shape, emath::TSTransform};
+use epaint::{ClippedShape, Shape, emath::Transform3D};
 
 /// Different layer categories
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -126,16 +126,20 @@ impl PaintList {
     #[inline(always)]
     pub fn add(&mut self, clip_rect: Rect, shape: Shape) -> ShapeIdx {
         let idx = self.next_idx();
-        self.0.push(ClippedShape { clip_rect, shape });
+        self.0.push(ClippedShape {
+            clip_rect,
+            transform: None,
+            shape,
+        });
         idx
     }
 
     pub fn extend<I: IntoIterator<Item = Shape>>(&mut self, clip_rect: Rect, shapes: I) {
-        self.0.extend(
-            shapes
-                .into_iter()
-                .map(|shape| ClippedShape { clip_rect, shape }),
-        );
+        self.0.extend(shapes.into_iter().map(|shape| ClippedShape {
+            clip_rect,
+            transform: None,
+            shape,
+        }));
     }
 
     /// Modify an existing [`Shape`].
@@ -152,7 +156,11 @@ impl PaintList {
             return;
         }
 
-        self.0[idx.0] = ClippedShape { clip_rect, shape };
+        self.0[idx.0] = ClippedShape {
+            clip_rect,
+            transform: None,
+            shape,
+        };
     }
 
     /// Set the given shape to be empty (a `Shape::Noop`).
@@ -166,19 +174,13 @@ impl PaintList {
         self.0.get_mut(idx.0).map(f);
     }
 
-    /// Transform each [`Shape`] and clip rectangle by this much, in-place
-    pub fn transform(&mut self, transform: TSTransform) {
-        for ClippedShape { clip_rect, shape } in &mut self.0 {
-            *clip_rect = transform.mul_rect(*clip_rect);
-            shape.transform(transform);
-        }
-    }
-
-    /// Transform each [`Shape`] and clip rectangle in range by this much, in-place
-    pub fn transform_range(&mut self, start: ShapeIdx, end: ShapeIdx, transform: TSTransform) {
-        for ClippedShape { clip_rect, shape } in &mut self.0[start.0..end.0] {
-            *clip_rect = transform.mul_rect(*clip_rect);
-            shape.transform(transform);
+    /// Attach a transform to shapes in a range without discarding their local Z plane.
+    pub fn transform_range(&mut self, start: ShapeIdx, end: ShapeIdx, transform: Transform3D) {
+        for clipped_shape in &mut self.0[start.0..end.0] {
+            clipped_shape.transform = Some(match clipped_shape.transform {
+                Some(current) => transform * current,
+                None => transform,
+            });
         }
     }
 
@@ -213,7 +215,7 @@ impl GraphicLayers {
     pub fn drain(
         &mut self,
         area_order: &[LayerId],
-        to_global: &ahash::HashMap<LayerId, TSTransform>,
+        to_global: &ahash::HashMap<LayerId, Transform3D>,
     ) -> Vec<ClippedShape> {
         profiling::function_scope!();
 
@@ -233,9 +235,7 @@ impl GraphicLayers {
                     && let Some(list) = order_map.get_mut(&layer_id.id)
                 {
                     if let Some(to_global) = to_global.get(layer_id) {
-                        for clipped_shape in &mut list.0 {
-                            clipped_shape.transform(*to_global);
-                        }
+                        list.transform_range(ShapeIdx(0), list.next_idx(), *to_global);
                     }
                     all_shapes.append(&mut list.0);
                 }
@@ -249,9 +249,7 @@ impl GraphicLayers {
                 let layer_id = LayerId::new(order, *id);
 
                 if let Some(to_global) = to_global.get(&layer_id) {
-                    for clipped_shape in &mut list.0 {
-                        clipped_shape.transform(*to_global);
-                    }
+                    list.transform_range(ShapeIdx(0), list.next_idx(), *to_global);
                 }
 
                 all_shapes.append(&mut list.0);

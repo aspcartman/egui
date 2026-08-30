@@ -107,7 +107,7 @@ impl TextShape {
     }
 
     /// Move the shape by this many points, in-place.
-    pub fn transform(&mut self, transform: emath::TSTransform) {
+    pub(crate) fn transform_planar(&mut self, transform: emath::Transform3D, scaling: f32) {
         let Self {
             pos,
             galley,
@@ -118,8 +118,8 @@ impl TextShape {
             angle: _,
         } = self;
 
-        *pos = transform * *pos;
-        underline.width *= transform.scaling;
+        *pos = transform.transform_pos2(*pos).unwrap_or(*pos);
+        underline.width *= scaling;
 
         let Galley {
             job: _,
@@ -133,9 +133,9 @@ impl TextShape {
             intrinsic_size,
         } = Arc::make_mut(galley);
 
-        *rect = transform.scaling * *rect;
-        *mesh_bounds = transform.scaling * *mesh_bounds;
-        *intrinsic_size = transform.scaling * *intrinsic_size;
+        *rect = scaling * *rect;
+        *mesh_bounds = scaling * *mesh_bounds;
+        *intrinsic_size = scaling * *intrinsic_size;
 
         for text::PlacedRow {
             pos,
@@ -143,7 +143,7 @@ impl TextShape {
             ends_with_newline: _,
         } in rows
         {
-            *pos *= transform.scaling;
+            *pos *= scaling;
 
             let text::Row {
                 section_index_at_start: _,
@@ -152,7 +152,7 @@ impl TextShape {
                 visuals,
             } = Arc::make_mut(row);
 
-            *size *= transform.scaling;
+            *size *= scaling;
 
             let text::RowVisuals {
                 mesh,
@@ -161,10 +161,10 @@ impl TextShape {
                 glyph_vertex_range: _,
             } = visuals;
 
-            *mesh_bounds = transform.scaling * *mesh_bounds;
+            *mesh_bounds = scaling * *mesh_bounds;
 
             for v in &mut mesh.vertices {
-                v.pos *= transform.scaling;
+                v.pos *= scaling;
             }
         }
     }

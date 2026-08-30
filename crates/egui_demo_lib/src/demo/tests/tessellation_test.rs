@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use egui::{
     Color32, Pos2, Rect, Sense, StrokeKind, Vec2,
-    emath::{GuiRounding as _, TSTransform},
+    emath::GuiRounding as _,
     epaint::{self, RectShape},
     vec2,
 };
@@ -228,10 +228,9 @@ impl crate::View for TessellationTest {
                 tessellator.tessellate_rect(&shape, &mut mesh);
 
                 // Scale and position the mesh:
-                mesh.transform(
-                    TSTransform::from_translation(canvas.center().to_vec2())
-                        * TSTransform::from_scaling(magnification_pixel_size),
-                );
+                for vertex in &mut mesh.vertices {
+                    vertex.pos = magnification_pixel_size * vertex.pos + canvas.center().to_vec2();
+                }
                 let mesh = Arc::new(mesh);
                 painter.add(epaint::Shape::mesh(Arc::clone(&mesh)));
 
