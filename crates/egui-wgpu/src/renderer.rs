@@ -1246,10 +1246,12 @@ impl Renderer {
             })
         };
 
+        // Empty mesh frames must not retain slices uploaded for a previous frame.
+        self.index_buffer.slices.clear();
+        self.vertex_buffer.slices.clear();
+
         if index_count > 0 {
             profiling::scope!("indices", index_count.to_string().as_str());
-
-            self.index_buffer.slices.clear();
 
             let required_index_buffer_size = (core::mem::size_of::<u32>() * index_count) as u64;
             if self.index_buffer.capacity < required_index_buffer_size {
@@ -1292,8 +1294,6 @@ impl Renderer {
         }
         if vertex_count > 0 {
             profiling::scope!("vertices", vertex_count.to_string().as_str());
-
-            self.vertex_buffer.slices.clear();
 
             let required_vertex_buffer_size =
                 (core::mem::size_of::<Vertex>() * vertex_count) as u64;
