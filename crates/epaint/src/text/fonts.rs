@@ -638,4 +638,30 @@ mod tests {
         let width = view.glyph_width(&FontId::new(12.0, FontFamily::Proportional), ' ');
         assert_eq!(width, 0.0);
     }
+
+    /// Changing dilation must refresh ink without changing line layout at either DPI.
+    #[test]
+    fn dilation_refreshes_ink_but_preserves_layout() {
+        for dpi in [1.0, 2.0] {
+            let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+            let mut baseline = None;
+            for radius in [0.0, 0.25, 0.0] {
+                fonts.begin_pass(TextOptions { glyph_dilation: radius, ..Default::default() });
+                let galley = fonts.with_pixels_per_point(dpi).layout_no_wrap(
+                    "Hello, egui!".into(), FontId::proportional(16.0), Color32::WHITE,
+                );
+                let ink: u64 = fonts.image().pixels.iter().map(|p| u64::from(p.a())).sum();
+                if let Some((size, original_ink)) = baseline {
+                    assert_eq!(galley.size(), size);
+                    if radius > 0.0 {
+                        assert!(ink > original_ink);
+                    } else {
+                        assert_eq!(ink, original_ink);
+                    }
+                } else {
+                    baseline = Some((galley.size(), ink));
+                }
+            }
+        }
+    }
 }

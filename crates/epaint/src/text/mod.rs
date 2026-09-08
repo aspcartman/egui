@@ -54,6 +54,14 @@ pub struct TextOptions {
     /// Default is `true`.
     pub font_hinting: bool,
 
+    /// Outline expansion radius in physical pixels, independent of font size and DPI.
+    ///
+    /// Thickens outline glyphs without changing layout. Color glyphs and platform
+    /// fallback bitmaps are unaffected. Try `0.15` for subtle thickening.
+    /// Clamped to `0.0..=1.0`; non-finite values disable it. Default: `0.0`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub glyph_dilation: f32,
+
     /// Enable sub-pixel binning for glyphs.
     ///
     /// Sub-pixel binning renders each glyph at up to four fractional horizontal offsets,
@@ -75,6 +83,7 @@ impl Default for TextOptions {
             max_texture_side: 2048, // Small but portable
             color_transfer_function: crate::FontColorTransferFunction::default(),
             font_hinting: true,
+            glyph_dilation: 0.0,
             subpixel_binning: true,
         }
     }
