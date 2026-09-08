@@ -21,6 +21,7 @@ use egui::{Pos2, Rect, Theme, Vec2, ViewportBuilder, ViewportCommand, ViewportId
 pub use winit;
 
 pub mod clipboard;
+#[cfg(not(target_arch = "wasm32"))]
 mod dropped_file;
 mod safe_area;
 mod window_settings;
@@ -29,6 +30,7 @@ pub use window_settings::WindowSettings;
 
 use raw_window_handle::HasDisplayHandle;
 
+#[cfg(not(target_arch = "wasm32"))]
 use dropped_file::NativeFile;
 
 use winit::{
@@ -218,6 +220,12 @@ impl State {
     /// Fetches text from the clipboard and returns it.
     pub fn clipboard_text(&mut self) -> Option<String> {
         self.clipboard.get()
+    }
+
+    /// Fetches an image from the clipboard and returns it, if there is one and the platform
+    /// backend supports it. Mirrors [`Self::clipboard_text`] for images.
+    pub fn clipboard_image(&mut self) -> Option<egui::ColorImage> {
+        self.clipboard.get_image()
     }
 
     /// Places the text onto the clipboard.
@@ -471,6 +479,7 @@ impl State {
                     consumed: false,
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::DroppedFile(path) => {
                 self.egui_input.hovered_files.clear();
                 self.egui_input
@@ -481,6 +490,13 @@ impl State {
                     consumed: false,
                 }
             }
+            // Winit's web backend does not emit file-drop events. Browser file reads
+            // require a browser file handle, which this path-only event cannot provide.
+            #[cfg(target_arch = "wasm32")]
+            WindowEvent::DroppedFile(_) => EventResponse {
+                repaint: false,
+                consumed: false,
+            },
             WindowEvent::ModifiersChanged(state) => {
                 let state = state.state();
 
@@ -1030,6 +1046,14 @@ impl State {
                         if !contents.is_empty() {
                             self.egui_input.events.push(egui::Event::Paste(contents));
                         }
+                    } else if let Some(image) = self.clipboard.get_image() {
+                        // No usable text on the clipboard (e.g. an image was copied with
+                        // mspaint/Snipping Tool, which never puts a text representation
+                        // alongside it) — fall back to an image paste rather than doing
+                        // nothing, mirroring `Event::Copy`/`OutputCommand::CopyImage`.
+                        self.egui_input
+                            .events
+                            .push(egui::Event::PasteImage(std::sync::Arc::new(image)));
                     }
                     return;
                 }
@@ -1705,9 +1729,9 @@ fn translate_cursor(cursor_icon: egui::CursorIcon) -> Option<winit::window::Curs
 
 // Helpers for egui Viewports
 // ---------------------------------------------------------------------------
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(Debug)]
 pub enum ActionRequested {
-    Screenshot(egui::UserData),
+    Screenshot(egui::ScreenshotCallback),
     Cut,
     Copy,
     Paste,
@@ -1937,8 +1961,8 @@ fn process_viewport_command(
                 log::warn!("{command:?}: {err}");
             }
         }
-        ViewportCommand::Screenshot(user_data) => {
-            actions_requested.push(ActionRequested::Screenshot(user_data));
+        ViewportCommand::Screenshot(callback) => {
+            actions_requested.push(ActionRequested::Screenshot(callback));
         }
         ViewportCommand::RequestCut => {
             actions_requested.push(ActionRequested::Cut);
