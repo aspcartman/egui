@@ -99,6 +99,7 @@ impl FontCell {
         glyph_id: GlyphId,
         bin: SubpixelBin,
         hinting_target: skrifa::outline::Target,
+        glyph_dilation: f32,
     ) -> Option<GlyphBitmap> {
         let location: skrifa::instance::LocationRef<'_> = (&metrics.location).into();
 
@@ -145,7 +146,16 @@ impl FontCell {
             Some(())
         })?;
 
-        let bounds = path.control_box().expand();
+        // Empty outlines (spaces) must remain invisible even with dilation enabled.
+        if path.is_empty() {
+            return None;
+        }
+        let dilation = if glyph_dilation.is_finite() {
+            glyph_dilation.clamp(0.0, 1.0) as f64
+        } else {
+            0.0
+        };
+        let bounds = path.control_box().inflate(dilation, dilation).expand();
         let width = bounds.width() as u16;
         let height = bounds.height() as u16;
         if width == 0 || height == 0 {
@@ -156,6 +166,11 @@ impl FontCell {
         ctx.set_transform(kurbo::Affine::translate((-bounds.x0, -bounds.y0)));
         ctx.set_paint(color::OpaqueColor::<color::Srgb>::WHITE);
         ctx.fill_path(&path);
+        // Expand ink, including bitmap bounds, while leaving font advances unchanged.
+        if dilation > 0.0 {
+            ctx.set_stroke(kurbo::Stroke::new(2.0 * dilation).with_join(kurbo::Join::Round));
+            ctx.stroke_path(&path);
+        }
         let mut dest = vello_cpu::Pixmap::new(width, height);
         let mut resources = vello_cpu::Resources::new();
         ctx.render(&mut dest, &mut resources);
@@ -667,10 +682,11 @@ impl FontFace {
         metrics: &StyledMetrics,
         glyph_id: GlyphId,
         bin: SubpixelBin,
+        glyph_dilation: f32,
     ) -> Option<GlyphBitmap> {
         let hinting_target = self.tweak.hinting_target.into();
         self.font
-            .rasterize_glyph(metrics, glyph_id, bin, hinting_target)
+            .rasterize_glyph(metrics, glyph_id, bin, hinting_target, glyph_dilation)
     }
 }
 

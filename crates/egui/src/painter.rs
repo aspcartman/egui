@@ -199,11 +199,48 @@ impl Painter {
     }
 
     fn transform_shape(&self, shape: &mut Shape) {
+        self.resolve_text_dilation(shape);
         if let Some(fade_to_color) = self.fade_to_color {
             tint_shape_towards(shape, fade_to_color);
         }
         if self.opacity_factor < 1.0 {
             multiply_opacity(shape, self.opacity_factor);
+        }
+    }
+
+    /// Resolve late text colors before atlas upload; layout jobs are cached normally.
+    fn resolve_text_dilation(&self, shape: &mut Shape) {
+        match shape {
+            Shape::Vec(shapes) => {
+                for shape in shapes {
+                    self.resolve_text_dilation(shape);
+                }
+            }
+            Shape::Text(text) => {
+                self.ctx.fonts_mut(|fonts| {
+                    let options = fonts.options();
+                    if !options.glyph_dilation_by_brightness || options.glyph_dilation <= 0.0 {
+                        return;
+                    }
+                    let job = &text.galley.job;
+                    if !job.sections.iter().any(|section| {
+                        text.override_text_color.is_some_and(|color| color != section.format.color)
+                            || section.format.color == Color32::PLACEHOLDER
+                    }) {
+                        return;
+                    }
+                    let mut job = (**job).clone();
+                    for section in &mut job.sections {
+                        if let Some(color) = text.override_text_color {
+                            section.format.color = color;
+                        } else if section.format.color == Color32::PLACEHOLDER {
+                            section.format.color = text.fallback_color;
+                        }
+                    }
+                    text.galley = fonts.layout_job(job);
+                });
+            }
+            _ => {}
         }
     }
 
@@ -227,13 +264,12 @@ impl Painter {
         if self.fade_to_color == Some(Color32::TRANSPARENT) || self.opacity_factor == 0.0 {
             return;
         }
-        if self.fade_to_color.is_some() || self.opacity_factor < 1.0 {
-            let shapes = shapes.into_iter().map(|mut shape| {
+        {
+            // Resolve fonts before acquiring the paint-list context lock.
+            let shapes: Vec<_> = shapes.into_iter().map(|mut shape| {
                 self.transform_shape(&mut shape);
                 shape
-            });
-            self.paint_list(|l| l.extend(self.clip_rect, shapes));
-        } else {
+            }).collect();
             self.paint_list(|l| l.extend(self.clip_rect, shapes));
         }
     }
@@ -566,4 +602,43 @@ fn multiply_opacity(shape: &mut Shape, opacity: f32) {
             *color = color.gamma_multiply(opacity);
         }
     });
+}
+
+#[cfg(test)]
+mod dilation_tests {
+    use super::*;
+
+    /// Late fallback and override colors must select their own atlas variants.
+    #[test]
+    fn painter_resolves_brightness_for_late_colors() {
+        let ctx = Context::default();
+        ctx.all_styles_mut(|style| {
+            style.visuals.text_options.glyph_dilation = 0.15;
+            style.visuals.text_options.glyph_dilation_by_brightness = true;
+        });
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let ctx = ui.ctx();
+            let painter = ctx.layer_painter(LayerId::background());
+            let galley = painter.layout_no_wrap(
+                "Hello".into(), FontId::proportional(16.0), Color32::PLACEHOLDER,
+            );
+            let mut dark = Shape::galley(Pos2::ZERO, galley.clone(), Color32::BLACK);
+            let mut light = Shape::galley_with_override_text_color(
+                Pos2::ZERO, galley.clone(), Color32::WHITE,
+            );
+            painter.resolve_text_dilation(&mut dark);
+            painter.resolve_text_dilation(&mut light);
+            let (Shape::Text(dark_text), Shape::Text(light_text)) = (&dark, &light) else {
+                panic!("expected text shapes");
+            };
+            assert_eq!(dark_text.galley.job.sections[0].format.color, Color32::BLACK);
+            assert_eq!(light_text.galley.job.sections[0].format.color, Color32::WHITE);
+            assert_eq!(dark_text.galley.size(), galley.size());
+            assert_eq!(light_text.galley.size(), galley.size());
+            assert_ne!(dark_text.galley.rows[0].glyphs[0].uv_rect.min,
+                light_text.galley.rows[0].glyphs[0].uv_rect.min);
+            painter.extend([Shape::Vec(vec![dark, light])]);
+        });
+        output.textures_delta.clear();
+    }
 }

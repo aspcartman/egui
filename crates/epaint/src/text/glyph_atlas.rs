@@ -147,6 +147,7 @@ impl OutlineGlyphKey {
         glyph_id: GlyphId,
         metrics: &StyledMetrics,
         bin: SubpixelBin,
+        dilation_level: u8,
     ) -> Self {
         let StyledMetrics {
             pixels_per_point,
@@ -168,6 +169,7 @@ impl OutlineGlyphKey {
             pixels_per_point.to_bits(),
             px_scale_factor.to_bits(),
             bin,
+            dilation_level,
             location_hash,
         )))
     }
@@ -269,6 +271,7 @@ impl GlyphAtlas {
         face: &mut FontFace,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
+        dilation_level: u8,
     ) -> OutlineGlyph {
         let ShapedGlyph {
             glyph_id,
@@ -276,8 +279,8 @@ impl GlyphAtlas {
             is_cjk,
         } = *shaped;
 
-        let subpixel_binning =
-            face.subpixel_binning() && !is_cjk && !face.is_color_glyph(metrics, glyph_id);
+        let is_color = face.is_color_glyph(metrics, glyph_id);
+        let subpixel_binning = face.subpixel_binning() && !is_cjk && !is_color;
         let (x_px, bin) = if subpixel_binning {
             SubpixelBin::new(h_pos)
         } else {
@@ -287,7 +290,9 @@ impl GlyphAtlas {
             (h_pos.round() as i32, SubpixelBin::Zero)
         };
 
-        let key = OutlineGlyphKey::new(face_key, glyph_id, metrics, bin);
+        // Color glyphs share a single undilated variant regardless of section brightness.
+        let dilation_level = if is_color { 0 } else { dilation_level };
+        let key = OutlineGlyphKey::new(face_key, glyph_id, metrics, bin, dilation_level);
 
         let Self {
             atlas,
@@ -295,7 +300,8 @@ impl GlyphAtlas {
             ..
         } = self;
         let allocation = *outline_glyphs.entry(key).or_insert_with(|| {
-            face.rasterize_glyph(metrics, glyph_id, bin)
+            face.rasterize_glyph(metrics, glyph_id, bin,
+                atlas.options().glyph_dilation.clamp(0.0, 1.0) * f32::from(dilation_level) / 4.0)
                 .and_then(|bitmap| {
                     let transfer = Self::transfer_function(atlas, bitmap.is_color);
                     let mut uv_rect =

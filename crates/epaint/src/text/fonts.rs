@@ -575,12 +575,13 @@ impl FontsImpl {
         face_key: FontFaceKey,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
+        dilation_level: u8,
     ) -> OutlineGlyph {
         let Some(face) = self.faces.get_mut(face_key) else {
             return Default::default();
         };
         self.glyphs
-            .allocate_outline(face_key, face, metrics, shaped)
+            .allocate_outline(face_key, face, metrics, shaped, dilation_level)
     }
 
     /// Rasterize a grapheme cluster using the platform [`GlyphRasterizer`].
@@ -637,5 +638,56 @@ mod tests {
 
         let width = view.glyph_width(&FontId::new(12.0, FontFamily::Proportional), ' ');
         assert_eq!(width, 0.0);
+    }
+
+    /// Changing dilation must refresh ink without changing line layout at either DPI.
+    #[test]
+    fn dilation_refreshes_ink_but_preserves_layout() {
+        for dpi in [1.0, 2.0] {
+            let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+            let mut baseline = None;
+            for radius in [0.0, 0.25, 0.0] {
+                fonts.begin_pass(TextOptions { glyph_dilation: radius, ..Default::default() });
+                let galley = fonts.with_pixels_per_point(dpi).layout_no_wrap(
+                    "Hello, egui!".into(), FontId::proportional(16.0), Color32::WHITE,
+                );
+                let ink: u64 = fonts.image().pixels.iter().map(|p| u64::from(p.a())).sum();
+                if let Some((size, original_ink)) = baseline {
+                    assert_eq!(galley.size(), size);
+                    if radius > 0.0 {
+                        assert!(ink > original_ink);
+                    } else {
+                        assert_eq!(ink, original_ink);
+                    }
+                } else {
+                    baseline = Some((galley.size(), ink));
+                }
+            }
+        }
+    }
+
+    /// Brightness variants must coexist in the atlas, sharing only equal levels.
+    #[test]
+    fn brightness_dilation_caches_five_levels() {
+        let mut fonts = Fonts::new(TextOptions {
+            glyph_dilation: 0.15,
+            glyph_dilation_by_brightness: true,
+            ..Default::default()
+        }, FontDefinitions::default());
+        let mut variants = Vec::new();
+        for gray in [0, 64, 128, 191, 255, 250, 0] {
+            let galley = fonts.with_pixels_per_point(2.0).layout_no_wrap(
+                "H".into(), FontId::proportional(16.0), Color32::from_gray(gray),
+            );
+            variants.push((galley.size(), galley.rows[0].glyphs[0].uv_rect.min));
+        }
+        assert!(variants.iter().all(|v| v.0 == variants[0].0));
+        for i in 0..5 {
+            for j in 0..i {
+                assert_ne!(variants[i].1, variants[j].1);
+            }
+        }
+        assert_eq!(variants[4].1, variants[5].1);
+        assert_eq!(variants[0].1, variants[6].1);
     }
 }
