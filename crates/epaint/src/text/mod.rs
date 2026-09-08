@@ -62,6 +62,12 @@ pub struct TextOptions {
     #[cfg_attr(feature = "serde", serde(default))]
     pub glyph_dilation: f32,
 
+    /// Scale dilation by text brightness in five levels, from zero for black to
+    /// `glyph_dilation` for white. Uses GPUI's brightness rule, not CoreGraphics'
+    /// proprietary rasterization. Default: false (fixed dilation).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub glyph_dilation_by_brightness: bool,
+
     /// Enable sub-pixel binning for glyphs.
     ///
     /// Sub-pixel binning renders each glyph at up to four fractional horizontal offsets,
@@ -84,6 +90,7 @@ impl Default for TextOptions {
             color_transfer_function: crate::FontColorTransferFunction::default(),
             font_hinting: true,
             glyph_dilation: 0.0,
+            glyph_dilation_by_brightness: false,
             subpixel_binning: true,
         }
     }

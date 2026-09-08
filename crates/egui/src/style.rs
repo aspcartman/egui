@@ -2438,6 +2438,7 @@ impl Visuals {
                 color_transfer_function,
                 font_hinting,
                 glyph_dilation,
+                glyph_dilation_by_brightness,
                 subpixel_binning,
             } = text_options;
 
@@ -2445,6 +2446,7 @@ impl Visuals {
 
             ui.checkbox(font_hinting, "Font hinting (sharper text)");
             ui.add(Slider::new(glyph_dilation, 0.0..=1.0).text("Glyph dilation (physical px)"));
+            ui.checkbox(glyph_dilation_by_brightness, "Vary glyph dilation by text brightness");
             ui.checkbox(subpixel_binning, "Sub-pixel binning (more even kerning)");
         });
 

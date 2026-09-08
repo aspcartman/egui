@@ -164,6 +164,7 @@ pub(crate) fn layout(fonts: &mut FontsImpl, pixels_per_point: f32, job: Arc<Layo
 
 /// Shared context for emitting shaped glyphs into a [`Paragraph`].
 struct ShapingContext {
+    text_color: Color32,
     /// The family of the section being shaped.
     family: FamilyKey,
     pixels_per_point: f32,
@@ -339,6 +340,7 @@ fn layout_shaped_run(
                     glyph_info,
                     paragraph.cursor_x_px,
                     chr,
+                    ctx.text_color,
                 );
 
                 paragraph.cursor_x_px += advance_width_px;
@@ -357,6 +359,7 @@ fn layout_shaped_run(
                     h_pos: paragraph.cursor_x_px + x_offset_px,
                     is_cjk: is_cjk(chr),
                 },
+                ctx.text_color,
             );
 
             // Apply shaper y_offset — this varies per glyph instance so it
@@ -392,6 +395,7 @@ fn allocate_glyph_info(
     glyph_info: GlyphInfo,
     h_pos_px: f32,
     chr: char,
+    text_color: Color32,
 ) -> OutlineGlyph {
     let Some(glyph_id) = glyph_info.id else {
         return OutlineGlyph {
@@ -407,6 +411,7 @@ fn allocate_glyph_info(
             h_pos: h_pos_px,
             is_cjk: is_cjk(chr),
         },
+        text_color,
     )
 }
 
@@ -498,6 +503,7 @@ fn layout_section(
 
     let section_text = &job.text[byte_range.as_usize()];
     let mut ctx = ShapingContext {
+        text_color: section.format.color,
         family,
         pixels_per_point,
         font_size,
@@ -852,6 +858,7 @@ fn replace_last_glyph_with_overflow_character(
                 glyph_info,
                 overflow_glyph_x * pixels_per_point,
                 overflow_character,
+                section.format.color,
             );
 
             let font_metrics =

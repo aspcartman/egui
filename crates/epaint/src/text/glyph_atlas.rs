@@ -147,6 +147,7 @@ impl OutlineGlyphKey {
         glyph_id: GlyphId,
         metrics: &StyledMetrics,
         bin: SubpixelBin,
+        dilation_level: u8,
     ) -> Self {
         let StyledMetrics {
             pixels_per_point,
@@ -168,6 +169,7 @@ impl OutlineGlyphKey {
             pixels_per_point.to_bits(),
             px_scale_factor.to_bits(),
             bin,
+            dilation_level,
             location_hash,
         )))
     }
@@ -269,6 +271,7 @@ impl GlyphAtlas {
         face: &mut FontFace,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
+        text_color: ecolor::Color32,
     ) -> OutlineGlyph {
         let ShapedGlyph {
             glyph_id,
@@ -287,7 +290,22 @@ impl GlyphAtlas {
             (h_pos.round() as i32, SubpixelBin::Zero)
         };
 
-        let key = OutlineGlyphKey::new(face_key, glyph_id, metrics, bin);
+        // Quantize brightness so arbitrary text colors share at most five glyph bitmaps.
+        let options = self.atlas.options();
+        let dilation_level = if options.glyph_dilation <= 0.0
+            || !options.glyph_dilation.is_finite()
+            || face.is_color_glyph(metrics, glyph_id)
+        {
+            0
+        } else if options.glyph_dilation_by_brightness {
+            let [r, g, b, _] = text_color.to_srgba_unmultiplied();
+            let brightness = (0.2126 * f32::from(r) + 0.7152 * f32::from(g)
+                + 0.0722 * f32::from(b)) / 255.0;
+            (brightness * 4.0 + 0.5).floor().clamp(0.0, 4.0) as u8
+        } else {
+            4
+        };
+        let key = OutlineGlyphKey::new(face_key, glyph_id, metrics, bin, dilation_level);
 
         let Self {
             atlas,
@@ -295,7 +313,8 @@ impl GlyphAtlas {
             ..
         } = self;
         let allocation = *outline_glyphs.entry(key).or_insert_with(|| {
-            face.rasterize_glyph(metrics, glyph_id, bin, atlas.options().glyph_dilation)
+            face.rasterize_glyph(metrics, glyph_id, bin,
+                atlas.options().glyph_dilation.clamp(0.0, 1.0) * f32::from(dilation_level) / 4.0)
                 .and_then(|bitmap| {
                     let transfer = Self::transfer_function(atlas, bitmap.is_color);
                     let mut uv_rect =

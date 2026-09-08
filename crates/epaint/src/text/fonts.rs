@@ -575,12 +575,13 @@ impl FontsImpl {
         face_key: FontFaceKey,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
+        text_color: Color32,
     ) -> OutlineGlyph {
         let Some(face) = self.faces.get_mut(face_key) else {
             return Default::default();
         };
         self.glyphs
-            .allocate_outline(face_key, face, metrics, shaped)
+            .allocate_outline(face_key, face, metrics, shaped, text_color)
     }
 
     /// Rasterize a grapheme cluster using the platform [`GlyphRasterizer`].
@@ -663,5 +664,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Brightness variants must coexist in the atlas, sharing only equal levels.
+    #[test]
+    fn brightness_dilation_caches_five_levels() {
+        let mut fonts = Fonts::new(TextOptions {
+            glyph_dilation: 0.15,
+            glyph_dilation_by_brightness: true,
+            ..Default::default()
+        }, FontDefinitions::default());
+        let mut variants = Vec::new();
+        for gray in [0, 64, 128, 191, 255, 250, 0] {
+            let galley = fonts.with_pixels_per_point(2.0).layout_no_wrap(
+                "H".into(), FontId::proportional(16.0), Color32::from_gray(gray),
+            );
+            variants.push((galley.size(), galley.rows[0].glyphs[0].uv_rect.min));
+        }
+        assert!(variants.iter().all(|v| v.0 == variants[0].0));
+        for i in 0..5 {
+            for j in 0..i {
+                assert_ne!(variants[i].1, variants[j].1);
+            }
+        }
+        assert_eq!(variants[4].1, variants[5].1);
+        assert_eq!(variants[0].1, variants[6].1);
     }
 }
