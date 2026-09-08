@@ -199,6 +199,7 @@ impl Painter {
     }
 
     fn transform_shape(&self, shape: &mut Shape) {
+        self.resolve_text_dilation(shape);
         if let Some(fade_to_color) = self.fade_to_color {
             tint_shape_towards(shape, fade_to_color);
         }
@@ -251,7 +252,6 @@ impl Painter {
             self.paint_list(|l| l.add(self.clip_rect, Shape::Noop))
         } else {
             let mut shape = shape.into();
-            self.resolve_text_dilation(&mut shape);
             self.transform_shape(&mut shape);
             self.paint_list(|l| l.add(self.clip_rect, shape))
         }
@@ -264,28 +264,12 @@ impl Painter {
         if self.fade_to_color == Some(Color32::TRANSPARENT) || self.opacity_factor == 0.0 {
             return;
         }
-        let resolve_dilation = self.ctx.fonts_mut(|fonts| {
-            let options = fonts.options();
-            options.glyph_dilation_by_brightness
-                && options.glyph_dilation.is_finite()
-                && options.glyph_dilation > 0.0
-        });
-        if resolve_dilation {
+        {
             // Resolve fonts before acquiring the paint-list context lock.
             let shapes: Vec<_> = shapes.into_iter().map(|mut shape| {
-                self.resolve_text_dilation(&mut shape);
                 self.transform_shape(&mut shape);
                 shape
             }).collect();
-            self.paint_list(|l| l.extend(self.clip_rect, shapes));
-        } else if self.fade_to_color.is_some() || self.opacity_factor < 1.0 {
-            // Color-only transforms do not access fonts, so lazy iteration is safe here.
-            let shapes = shapes.into_iter().map(|mut shape| {
-                self.transform_shape(&mut shape);
-                shape
-            });
-            self.paint_list(|l| l.extend(self.clip_rect, shapes));
-        } else {
             self.paint_list(|l| l.extend(self.clip_rect, shapes));
         }
     }
@@ -296,7 +280,6 @@ impl Painter {
             return;
         }
         let mut shape = shape.into();
-        self.resolve_text_dilation(&mut shape);
         self.transform_shape(&mut shape);
         self.paint_list(|l| l.set(idx, self.clip_rect, shape));
     }
