@@ -95,3 +95,19 @@ impl Default for TextOptions {
         }
     }
 }
+
+impl TextOptions {
+    /// Select once per section; five cached levels follow GPUI's brightness quantization.
+    pub(crate) fn dilation_level(&self, color: ecolor::Color32) -> u8 {
+        if !self.glyph_dilation.is_finite() || self.glyph_dilation <= 0.0 {
+            return 0;
+        }
+        if !self.glyph_dilation_by_brightness {
+            return 4;
+        }
+        let [r, g, b, _] = color.to_srgba_unmultiplied();
+        let brightness = (0.2126 * f32::from(r) + 0.7152 * f32::from(g)
+            + 0.0722 * f32::from(b)) / 255.0;
+        (brightness * 4.0 + 0.5).floor().clamp(0.0, 4.0) as u8
+    }
+}

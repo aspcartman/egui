@@ -271,7 +271,7 @@ impl GlyphAtlas {
         face: &mut FontFace,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
-        text_color: ecolor::Color32,
+        dilation_level: u8,
     ) -> OutlineGlyph {
         let ShapedGlyph {
             glyph_id,
@@ -279,8 +279,8 @@ impl GlyphAtlas {
             is_cjk,
         } = *shaped;
 
-        let subpixel_binning =
-            face.subpixel_binning() && !is_cjk && !face.is_color_glyph(metrics, glyph_id);
+        let is_color = face.is_color_glyph(metrics, glyph_id);
+        let subpixel_binning = face.subpixel_binning() && !is_cjk && !is_color;
         let (x_px, bin) = if subpixel_binning {
             SubpixelBin::new(h_pos)
         } else {
@@ -290,21 +290,8 @@ impl GlyphAtlas {
             (h_pos.round() as i32, SubpixelBin::Zero)
         };
 
-        // Quantize brightness so arbitrary text colors share at most five glyph bitmaps.
-        let options = self.atlas.options();
-        let dilation_level = if options.glyph_dilation <= 0.0
-            || !options.glyph_dilation.is_finite()
-            || face.is_color_glyph(metrics, glyph_id)
-        {
-            0
-        } else if options.glyph_dilation_by_brightness {
-            let [r, g, b, _] = text_color.to_srgba_unmultiplied();
-            let brightness = (0.2126 * f32::from(r) + 0.7152 * f32::from(g)
-                + 0.0722 * f32::from(b)) / 255.0;
-            (brightness * 4.0 + 0.5).floor().clamp(0.0, 4.0) as u8
-        } else {
-            4
-        };
+        // Color glyphs share a single undilated variant regardless of section brightness.
+        let dilation_level = if is_color { 0 } else { dilation_level };
         let key = OutlineGlyphKey::new(face_key, glyph_id, metrics, bin, dilation_level);
 
         let Self {

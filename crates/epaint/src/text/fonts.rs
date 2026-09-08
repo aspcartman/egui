@@ -575,13 +575,13 @@ impl FontsImpl {
         face_key: FontFaceKey,
         metrics: &StyledMetrics,
         shaped: &ShapedGlyph,
-        text_color: Color32,
+        dilation_level: u8,
     ) -> OutlineGlyph {
         let Some(face) = self.faces.get_mut(face_key) else {
             return Default::default();
         };
         self.glyphs
-            .allocate_outline(face_key, face, metrics, shaped, text_color)
+            .allocate_outline(face_key, face, metrics, shaped, dilation_level)
     }
 
     /// Rasterize a grapheme cluster using the platform [`GlyphRasterizer`].
