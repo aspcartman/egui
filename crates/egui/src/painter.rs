@@ -208,7 +208,7 @@ impl Painter {
         }
     }
 
-    /// Resolve late text colors before atlas upload; layout jobs are cached normally.
+    /// Select dilation using fallback and override colors that were unavailable during layout.
     fn resolve_text_dilation(&self, shape: &mut Shape) {
         match shape {
             Shape::Vec(shapes) => {
@@ -265,7 +265,7 @@ impl Painter {
             return;
         }
         {
-            // Resolve fonts before acquiring the paint-list context lock.
+            // Font resolution also locks the context; finish it before locking the paint list.
             let shapes: Vec<_> = shapes.into_iter().map(|mut shape| {
                 self.transform_shape(&mut shape);
                 shape
@@ -608,7 +608,7 @@ fn multiply_opacity(shape: &mut Shape, opacity: f32) {
 mod dilation_tests {
     use super::*;
 
-    /// Late fallback and override colors must select their own atlas variants.
+    /// Fallback and override colors select distinct glyph variants without changing layout.
     #[test]
     fn painter_resolves_brightness_for_late_colors() {
         let ctx = Context::default();
