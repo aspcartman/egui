@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(width, 0.0);
     }
 
-    /// Changing dilation must refresh ink without changing line layout at either DPI.
+    /// Dilation changes atlas coverage, preserves layout, and can be disabled at both scales.
     #[test]
     fn dilation_refreshes_ink_but_preserves_layout() {
         for dpi in [1.0, 2.0] {

@@ -57,14 +57,16 @@ pub struct TextOptions {
     /// Outline expansion radius in physical pixels, independent of font size and DPI.
     ///
     /// Thickens outline glyphs without changing layout. Color glyphs and platform
-    /// fallback bitmaps are unaffected. Try `0.15` for subtle thickening.
+    /// fallback bitmaps are unaffected.
     /// Clamped to `0.0..=1.0`; non-finite values disable it. Default: `0.0`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub glyph_dilation: f32,
 
-    /// Scale dilation by text brightness in five levels, from zero for black to
-    /// `glyph_dilation` for white. Uses GPUI's brightness rule, not CoreGraphics'
-    /// proprietary rasterization. Default: false (fixed dilation).
+    /// Scale the outline expansion by text brightness.
+    ///
+    /// Uses five levels: 0%, 25%, 50%, 75%, and 100% of [`Self::glyph_dilation`],
+    /// from black to white. Brightness is computed from unmultiplied sRGB channels;
+    /// alpha does not affect the level. Default: `false` (fixed expansion).
     #[cfg_attr(feature = "serde", serde(default))]
     pub glyph_dilation_by_brightness: bool,
 
@@ -97,7 +99,7 @@ impl Default for TextOptions {
 }
 
 impl TextOptions {
-    /// Select once per section; five cached levels follow GPUI's brightness quantization.
+    /// Quantize a section's brightness to limit each glyph to five cached variants.
     pub(crate) fn dilation_level(&self, color: ecolor::Color32) -> u8 {
         if !self.glyph_dilation.is_finite() || self.glyph_dilation <= 0.0 {
             return 0;
